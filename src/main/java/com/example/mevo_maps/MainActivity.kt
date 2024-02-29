@@ -8,33 +8,27 @@ import androidx.appcompat.app.AppCompatActivity
 import kotlinx.coroutines.*
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import android.graphics.Color
 import androidx.lifecycle.lifecycleScope
-import com.google.gson.Gson
 
 import com.mapbox.bindgen.Value
-import com.mapbox.geojson.Feature
 import com.mapbox.geojson.FeatureCollection
 import com.mapbox.geojson.Point
 import com.mapbox.maps.CameraOptions
 import com.mapbox.maps.MapView
 import com.mapbox.maps.MapboxMap
 import com.mapbox.maps.Style
-import com.mapbox.maps.extension.style.expressions.generated.Expression.Companion.image
 import com.mapbox.maps.extension.style.layers.addLayer
-import com.mapbox.maps.extension.style.layers.generated.circleLayer
+import com.mapbox.maps.extension.style.layers.generated.lineLayer
 import com.mapbox.maps.extension.style.layers.generated.symbolLayer
 import com.mapbox.maps.extension.style.layers.properties.generated.IconAnchor
-import com.mapbox.maps.extension.style.sources.addSource
 import com.mapbox.maps.extension.style.sources.generated.GeoJsonSource
-import com.mapbox.maps.extension.style.sources.generated.geoJsonSource
 import org.json.JSONObject
 
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var mapboxMap: MapboxMap
-    lateinit var geoJsonSourceval : GeoJsonSource
+
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -46,25 +40,37 @@ class MainActivity : AppCompatActivity() {
             setCamera(
                 CameraOptions.Builder()
                     .center(Point.fromLngLat(174.7762, -41.2865)) // Coordinates of Wellington
-                    .zoom(16.0)
+                    .zoom(12.0)
                     .build()
             )
             loadStyle(Style.STANDARD) { style ->
 
 
                 lifecycleScope.launch {
-                    val featureCollection = fetchVehiclesData()
-
+                    val featureCollection = fetchData()
                     // Check if the feature collection is empty
                     if (featureCollection.features()?.isEmpty() == true) {
-                        Log.d("EMPTY", "Feature collection empty at Load Style----------------------------")
+                        Log.d("EMPTY", "Feature collection empty at Load Style")
                     }
                     else if(featureCollection.features() == null){
-                        Log.d("Null", "Feature collection empty at Load Style----------------------------")
+                        Log.d("Null", "Feature collection empty at Load Style")
                     }
                     else {
-                        Log.d("Successfulllllllllllllll", "Calling addGeo")
+                        Log.d("Successful Vehicle", "Calling addGeo")
                         addGeoJsonSource(style, featureCollection)
+                    }
+
+                    val featureCollectionPark = fetchDataPark()
+                    // Check if the feature collection is empty
+                    if (featureCollectionPark.features()?.isEmpty() == true) {
+                        Log.d("EMPTY", "Feature collection empty at Load Style")
+                    }
+                    else if(featureCollectionPark.features() == null){
+                        Log.d("Null", "Feature collection empty at Load Style")
+                    }
+                    else {
+                        Log.d("Successful Park", "Calling addGeo")
+                        //addGeoJsonSourcePoly(style, featureCollectionPark)
                     }
 
                 }
@@ -78,7 +84,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun addGeoJsonSource(style: Style, featureCollection: FeatureCollection) {
         featureCollection.features()?.forEachIndexed { index, feature ->
-            val sourceId = "source_$index"
+            val sourceId = "vehicleID_$index"
+
+
             val singleFeatureCollection = FeatureCollection.fromFeatures(listOf(feature))
             val singleFeatureCollectionJson = Value.fromJson(singleFeatureCollection.toJson())
 
@@ -113,7 +121,40 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private suspend fun fetchVehiclesData(): FeatureCollection {
+    private fun addGeoJsonSourcePoly(style: Style, featureCollection: FeatureCollection) {
+        featureCollection.features()?.forEachIndexed { index, feature ->
+            val sourceId = "parkID_$index"
+
+
+            val singleFeatureCollection = FeatureCollection.fromFeatures(listOf(feature))
+            val singleFeatureCollectionJson = Value.fromJson(singleFeatureCollection.toJson())
+
+            if (singleFeatureCollectionJson.isError) {
+                throw RuntimeException("Invalid GeoJson:" + singleFeatureCollectionJson.error)
+            }
+
+            val sourceParams = hashMapOf<String, Value>("type" to Value("geojson"), "data" to singleFeatureCollectionJson.value!!)
+            val addSourceResult = style.addStyleSource(sourceId, Value(sourceParams))
+
+
+            if (addSourceResult.isError) {
+                throw RuntimeException("Failed to add GeoJson source: ${addSourceResult.error}")
+            }
+
+
+
+
+
+            style.addLayer(symbolLayer("poly_$index", sourceId) {
+                lineLayer("poly_$index", sourceId) {
+                    lineWidth(3.0)
+                }
+
+            })
+        }
+    }
+
+    private suspend fun fetchData(): FeatureCollection {
         val client = OkHttpClient()
         val request = Request.Builder()
             .url("https://api.mevo.co.nz/public/vehicles/Wellington")
@@ -134,7 +175,43 @@ class MainActivity : AppCompatActivity() {
             return FeatureCollection.fromFeatures(emptyList())
         }else {
             // If there is a response body, log it with the tag "Successful"
-            Log.d("Successful-----------------------", responseBody)
+            Log.d("Successful", responseBody)
+
+
+            val jsonObject = JSONObject(responseBody)
+            val geoJsonString = jsonObject.getJSONObject("data").toString()
+
+            // Parse the extracted GeoJSON string into a FeatureCollection
+            val featCol = FeatureCollection.fromJson(geoJsonString)
+
+            Log.d("Successful", featCol.toString())
+            return featCol
+        }
+
+    }
+
+    private suspend fun fetchDataPark(): FeatureCollection {
+        val client = OkHttpClient()
+        val request = Request.Builder()
+            .url("https://api.mevo.co.nz/public/parking/Wellington")
+            .build()
+
+        val response = withContext(Dispatchers.IO) { client.newCall(request).execute() }
+
+        if (!response.isSuccessful) {
+            Log.e("MainActivity", "Failed to fetch data: ${response.code}")
+            return FeatureCollection.fromFeatures(emptyList()) // Return an empty collection in case of failure
+        }
+
+        val responseBody = response.body?.string()
+
+        // Check if the responseBody is not null, otherwise log and return an empty FeatureCollection
+        if (responseBody == null || responseBody.isEmpty()) {
+            Log.d("FAIL", "No data received or empty response")
+            return FeatureCollection.fromFeatures(emptyList())
+        }else {
+            // If there is a response body, log it with the tag "Successful"
+            Log.d("Successful", responseBody)
 
 
             val jsonObject = JSONObject(responseBody)
@@ -143,12 +220,9 @@ class MainActivity : AppCompatActivity() {
             // Now parse the extracted GeoJSON string into a FeatureCollection
             val featCol = FeatureCollection.fromJson(geoJsonString)
 
-            Log.d("Successful-----------------------------", featCol.toString())
+            Log.d("Successful", featCol.toString())
             return featCol
         }
-        //val responseBody = response.body?.string() ?: return FeatureCollection.fromFeatures(emptyList())
-
-        //return FeatureCollection.fromJson(responseBody)
     }
 
 
